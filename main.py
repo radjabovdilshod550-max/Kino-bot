@@ -1,6 +1,8 @@
+import os
 import asyncio
 import logging
 import sqlite3
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import (
     Message, 
@@ -14,14 +16,14 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
 # ⚙️ SOZLAMALAR
-TOKEN = "8745420312:AAE6xB0qADkWOWZIj0GleM8u-fioQsZQ_uc"
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8745420312:AAE6xB0qADkWOWZIj0GleM8u-fioQsZQ_uc")
 ADMIN_IDS = [8065627948]  # O'zingizning Telegram ID raqamingiz
 
 # Kanalingiz ID raqami va taklif havolasi
 REQUIRED_CHANNEL_ID = -1004483339199
 CHANNEL_INVITE_LINK = "https://t.me/+Vg4FF3ipPfQ3NzA6"
 
-bot = Bot(token=TOKEN)
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 # Holatlar (FSM)
@@ -66,6 +68,19 @@ def init_db():
     """)
     conn.commit()
     conn.close()
+
+# --- RENDER UCHUN VEB-SERVER ---
+async def handle(request):
+    return web.Response(text="Bot muvaffaqiyatli ishlayapti!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
 
 # --- MAJBURIY OBUNANI TEKSHIRISH FUNKSIYASI ---
 async def check_subscription(user_id: int) -> bool:
@@ -652,6 +667,9 @@ async def main():
         BotCommand(command="start", description="Botni ishga tushirish"),
         BotCommand(command="admin", description="Admin panel")
     ])
+    
+    # Render uchun aiohttp veb-serverini fonda ishga tushiramiz
+    asyncio.create_task(start_web_server())
     
     await dp.start_polling(bot)
 
