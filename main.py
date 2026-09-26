@@ -668,6 +668,9 @@ async def main():
         BotCommand(command="admin", description="Admin panel")
     ])
     
+    # Eski xabarlarni tozalash (eski updating xatolarini oldini oladi)
+    await bot.delete_webhook(drop_pending_updates=True)
+    
     # Render uchun aiohttp veb-serverini fonda ishga tushiramiz
     asyncio.create_task(start_web_server())
     
