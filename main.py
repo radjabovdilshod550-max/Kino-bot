@@ -20,8 +20,8 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "8745420312:AAE6xB0qADkWOWZIj0GleM8u-fioQsZQ_
 ADMIN_IDS = [8065627948]  # O'zingizning Telegram ID raqamingiz
 
 # Kanalingiz ID raqami va taklif havolasi
-REQUIRED_CHANNEL_ID = -1004483339199
-CHANNEL_INVITE_LINK = "https://t.me/+Vg4FF3ipPfQ3NzA6"
+REQUIRED_CHANNEL_ID = -1003825150972
+CHANNEL_INVITE_LINK = "https://t.me/Kinoizlabuz"
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
