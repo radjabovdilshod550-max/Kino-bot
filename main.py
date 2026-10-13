@@ -130,7 +130,7 @@ def get_admin_menu():
         inline_keyboard=[
             [InlineKeyboardButton(text="📊 Statistika", callback_data="admin_stats")],
             [InlineKeyboardButton(text="➕ Yangi kino qo'shish", callback_data="admin_add_movie")],
-            [InlineKeyboardButton(text="📋 Kinolar ro'yxati va o'chirish", callback_data="admin_movie_list")],
+            [InlineKeyboardButton(text="📋 Kinolar ro'yxati va o'chirish", callback_data="admin_movie_list_1")],
             [InlineKeyboardButton(text="🏠 Asosiy menyu", callback_data="back_to_main")]
         ]
     )
@@ -327,13 +327,22 @@ async def process_admin_video(message: Message, state: FSMContext):
         conn.close()
         await state.clear()
 
-@dp.callback_query(F.data == "admin_movie_list")
+# --- ADMIN UCHUN KINOLAR RO'YXATI VA SAHifalash ---
+@dp.callback_query(F.data.startswith("admin_movie_list_"))
 async def admin_movie_list(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
         return
+    
+    page = int(callback.data.split("_")[3])
+    limit = 10
+    offset = (page - 1) * limit
+
     conn = sqlite3.connect("movies.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT code, title FROM movies LIMIT 10")
+    cursor.execute("SELECT COUNT(*) FROM movies")
+    total_count = cursor.fetchone()[0]
+
+    cursor.execute("SELECT code, title FROM movies LIMIT ? OFFSET ?", (limit, offset))
     movies = cursor.fetchall()
     conn.close()
     
@@ -341,19 +350,40 @@ async def admin_movie_list(callback: CallbackQuery):
     for code, title in movies:
         keyboard_buttons.append([
             InlineKeyboardButton(text=f"🎬 {title}", callback_data="none"),
-            InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"del_movie_{code}")
+            InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"del_movie_{code}_{page}")
         ])
+    
+    # Sahifalash tugmalari
+    nav_buttons = []
+    if page > 1:
+        nav_buttons.append(InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"admin_movie_list_{page-1}"))
+    
+    total_pages = (total_count + limit - 1) // limit if total_count > 0 else 1
+    nav_buttons.append(InlineKeyboardButton(text=f"📄 {page}/{total_pages}", callback_data="none"))
+    
+    if page * limit < total_count:
+        nav_buttons.append(InlineKeyboardButton(text="Oldinga ➡️", callback_data=f"admin_movie_list_{page+1}"))
+    
+    if nav_buttons:
+        keyboard_buttons.append(nav_buttons)
+        
     keyboard_buttons.append([InlineKeyboardButton(text="⬅️ Ortga", callback_data="admin_main_menu")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
     
-    await callback.message.answer("📋 **So'nggi qo'shilgan kinolar:**", reply_markup=keyboard, parse_mode="Markdown")
+    try:
+        await callback.message.edit_text("📋 **Barcha kinolar ro'yxati (Admin):**", reply_markup=keyboard, parse_mode="Markdown")
+    except Exception:
+        await callback.message.answer("📋 **Barcha kinolar ro'yxati (Admin):**", reply_markup=keyboard, parse_mode="Markdown")
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("del_movie_"))
 async def delete_movie(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
         return
-    code = callback.data.split("_")[2]
+    parts = callback.data.split("_")
+    code = parts[2]
+    page = parts[3] if len(parts) > 3 else "1"
+
     conn = sqlite3.connect("movies.db")
     cursor = conn.cursor()
     cursor.execute("DELETE FROM movies WHERE code = ?", (code,))
@@ -361,7 +391,10 @@ async def delete_movie(callback: CallbackQuery):
     conn.close()
     
     await callback.answer(f"🗑 {code}-kodli kino o'chirildi!", show_alert=True)
-    await callback.message.delete()
+    
+    # Ro'yxatni yangilash uchun callback'ni simulyatsiya qilamiz
+    callback.data = f"admin_movie_list_{page}"
+    await admin_movie_list(callback)
 
 @dp.callback_query(F.data == "menu_search")
 async def cb_search(callback: CallbackQuery):
@@ -374,7 +407,7 @@ async def cb_catalogs(callback: CallbackQuery):
         inline_keyboard=[
             [InlineKeyboardButton(text="🔥 Eng ko'p ko'rilganlar", callback_data="cat_popular")],
             [InlineKeyboardButton(text="🆕 So'nggi qo'shilganlar", callback_data="cat_new")],
-            [InlineKeyboardButton(text="📋 Barcha kinolar ro'yxati", callback_data="cat_all")],
+            [InlineKeyboardButton(text="📋 Barcha kinolar ro'yxati", callback_data="cat_all_1")],
             [InlineKeyboardButton(text="🏠 Asosiy menyu", callback_data="back_to_main")]
         ]
     )
@@ -404,7 +437,7 @@ async def cb_genres(callback: CallbackQuery):
     keyboard_buttons = []
     row = []
     for g in sorted(genres_set):
-        row.append(InlineKeyboardButton(text=f"📌 {g}", callback_data=f"genre_{g}"))
+        row.append(InlineKeyboardButton(text=f"📌 {g}", callback_data=f"genre_{g}_1"))
         if len(row) == 2:
             keyboard_buttons.append(row)
             row = []
@@ -488,6 +521,10 @@ async def cb_info(callback: CallbackQuery):
 @dp.callback_query(F.data == "back_to_main")
 async def back_to_main_callback(callback: CallbackQuery):
     user_id = callback.from_user.id
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
     await callback.message.answer("🏠 **Asosiy menyu:**", reply_markup=get_main_menu(user_id), parse_mode="Markdown")
     await callback.answer()
 
@@ -587,53 +624,107 @@ async def show_new_movies(callback: CallbackQuery):
     await callback.message.answer(text, reply_markup=keyboard, parse_mode="Markdown")
     await callback.answer()
 
-@dp.callback_query(F.data == "cat_all")
+# --- BARCHA KINOLAR RO'YXATI (SAHIFALASH BILAN) ---
+@dp.callback_query(F.data.startswith("cat_all_"))
 async def show_all_movies(callback: CallbackQuery):
+    page = int(callback.data.split("_")[2])
+    limit = 15
+    offset = (page - 1) * limit
+
     conn = sqlite3.connect("movies.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT code, title, genre, country, year, desc, photo, quality, video, views FROM movies LIMIT 15")
+    cursor.execute("SELECT COUNT(*) FROM movies")
+    total_count = cursor.fetchone()[0]
+
+    cursor.execute("SELECT code, title, genre, country, year, desc, photo, quality, video, views FROM movies LIMIT ? OFFSET ?", (limit, offset))
     movies = cursor.fetchall()
     conn.close()
     
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="🏠 Asosiy menyu", callback_data="back_to_main")]]
-    )
-    if not movies:
+    keyboard_buttons = []
+    
+    if not movies and page == 1:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Asosiy menyu", callback_data="back_to_main")]])
         await callback.message.answer("⚠️ Hozircha kinolar mavjud emas.", reply_markup=keyboard)
         await callback.answer()
         return
         
-    text = "📋 **Bazadagi kinolar ro'yxati:**\n────────────────────────\n\n"
-    for idx, m in enumerate(movies, 1):
+    text = f"📋 **Bazadagi kinolar ro'yxati (Sahifa {page}):**\n────────────────────────\n\n"
+    for idx, m in enumerate(movies, start=offset + 1):
         code, title, genre, country, year, desc, photo, quality, video, views = m
         text += f"{idx}. 🎬 **{title}** ({year})\n  📲 Kodi: `{code}`\n\n"
         
-    await callback.message.answer(text, reply_markup=keyboard, parse_mode="Markdown")
+    # Navigatsiya tugmalari
+    nav_buttons = []
+    if page > 1:
+        nav_buttons.append(InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"cat_all_{page-1}"))
+    
+    total_pages = (total_count + limit - 1) // limit if total_count > 0 else 1
+    nav_buttons.append(InlineKeyboardButton(text=f"📄 {page}/{total_pages}", callback_data="none"))
+    
+    if page * limit < total_count:
+        nav_buttons.append(InlineKeyboardButton(text="Oldinga ➡️", callback_data=f"cat_all_{page+1}"))
+        
+    if nav_buttons:
+        keyboard_buttons.append(nav_buttons)
+        
+    keyboard_buttons.append([InlineKeyboardButton(text="🏠 Asosiy menyu", callback_data="back_to_main")])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+    
+    try:
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="Markdown")
+    except Exception:
+        await callback.message.answer(text, reply_markup=keyboard, parse_mode="Markdown")
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("genre_"))
 async def show_genre_movies(callback: CallbackQuery):
-    genre_name = callback.data.split("_", 1)[1]
+    parts = callback.data.split("_")
+    genre_name = parts[1]
+    page = int(parts[2]) if len(parts) > 2 else 1
+    limit = 10
+    offset = (page - 1) * limit
+
     conn = sqlite3.connect("movies.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT code, title, genre, country, year, desc, photo, quality, video, views FROM movies WHERE genre LIKE ?", (f"%{genre_name}%",))
+    cursor.execute("SELECT COUNT(*) FROM movies WHERE genre LIKE ?", (f"%{genre_name}%",))
+    total_count = cursor.fetchone()[0]
+
+    cursor.execute("SELECT code, title, genre, country, year, desc, photo, quality, video, views FROM movies WHERE genre LIKE ? LIMIT ? OFFSET ?", (f"%{genre_name}%", limit, offset))
     movies = cursor.fetchall()
     conn.close()
     
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="🏠 Asosiy menyu", callback_data="back_to_main")]]
-    )
+    keyboard_buttons = []
     if not movies:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Asosiy menyu", callback_data="back_to_main")]])
         await callback.message.answer(f"⚠️ '{genre_name}' janrida kinolar topilmadi.", reply_markup=keyboard)
         await callback.answer()
         return
         
-    text = f"🎭 **'{genre_name}' janridagi kinolar:**\n────────────────────────\n\n"
-    for idx, m in enumerate(movies, 1):
+    text = f"🎭 **'{genre_name}' janridagi kinolar (Sahifa {page}):**\n────────────────────────\n\n"
+    for idx, m in enumerate(movies, start=offset + 1):
         code, title, genre, country, year, desc, photo, quality, video, views = m
         text += f"{idx}. 🎬 **{title}** ({year})\n  ✨ {quality} | 👀 {views}\n  📲 Kodi: `{code}`\n\n"
         
-    await callback.message.answer(text, reply_markup=keyboard, parse_mode="Markdown")
+    nav_buttons = []
+    if page > 1:
+        nav_buttons.append(InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"genre_{genre_name}_{page-1}"))
+    
+    total_pages = (total_count + limit - 1) // limit if total_count > 0 else 1
+    nav_buttons.append(InlineKeyboardButton(text=f"📄 {page}/{total_pages}", callback_data="none"))
+    
+    if page * limit < total_count:
+        nav_buttons.append(InlineKeyboardButton(text="Oldinga ➡️", callback_data=f"genre_{genre_name}_{page+1}"))
+        
+    if nav_buttons:
+        keyboard_buttons.append(nav_buttons)
+        
+    keyboard_buttons.append([InlineKeyboardButton(text="🏠 Asosiy menyu", callback_data="back_to_main")])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+    
+    try:
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="Markdown")
+    except Exception:
+        await callback.message.answer(text, reply_markup=keyboard, parse_mode="Markdown")
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("fav_add_"))
@@ -668,10 +759,7 @@ async def main():
         BotCommand(command="admin", description="Admin panel")
     ])
     
-    # Eski xabarlarni tozalash (eski updating xatolarini oldini oladi)
     await bot.delete_webhook(drop_pending_updates=True)
-    
-    # Render uchun aiohttp veb-serverini fonda ishga tushiramiz
     asyncio.create_task(start_web_server())
     
     await dp.start_polling(bot)
