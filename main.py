@@ -327,14 +327,14 @@ async def process_admin_video(message: Message, state: FSMContext):
         conn.close()
         await state.clear()
 
-# --- ADMIN UCHUN KINOLAR RO'YXATI VA SAHifalash ---
+# --- ADMIN UCHUN KINOLAR RO'YXATI VA SAHifalash (15 tadan) ---
 @dp.callback_query(F.data.startswith("admin_movie_list_"))
 async def admin_movie_list(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
         return
     
     page = int(callback.data.split("_")[3])
-    limit = 10
+    limit = 15
     offset = (page - 1) * limit
 
     conn = sqlite3.connect("movies.db")
@@ -392,7 +392,6 @@ async def delete_movie(callback: CallbackQuery):
     
     await callback.answer(f"🗑 {code}-kodli kino o'chirildi!", show_alert=True)
     
-    # Ro'yxatni yangilash uchun callback'ni simulyatsiya qilamiz
     callback.data = f"admin_movie_list_{page}"
     await admin_movie_list(callback)
 
@@ -624,7 +623,7 @@ async def show_new_movies(callback: CallbackQuery):
     await callback.message.answer(text, reply_markup=keyboard, parse_mode="Markdown")
     await callback.answer()
 
-# --- BARCHA KINOLAR RO'YXATI (SAHIFALASH BILAN) ---
+# --- BARCHA KINOLAR RO'YXATI (15 tadan sahifalanadi) ---
 @dp.callback_query(F.data.startswith("cat_all_"))
 async def show_all_movies(callback: CallbackQuery):
     page = int(callback.data.split("_")[2])
@@ -653,7 +652,6 @@ async def show_all_movies(callback: CallbackQuery):
         code, title, genre, country, year, desc, photo, quality, video, views = m
         text += f"{idx}. 🎬 **{title}** ({year})\n  📲 Kodi: `{code}`\n\n"
         
-    # Navigatsiya tugmalari
     nav_buttons = []
     if page > 1:
         nav_buttons.append(InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"cat_all_{page-1}"))
@@ -681,7 +679,7 @@ async def show_genre_movies(callback: CallbackQuery):
     parts = callback.data.split("_")
     genre_name = parts[1]
     page = int(parts[2]) if len(parts) > 2 else 1
-    limit = 10
+    limit = 15
     offset = (page - 1) * limit
 
     conn = sqlite3.connect("movies.db")
