@@ -14,6 +14,7 @@ from aiogram.types import (
 from aiogram.filters import Command
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
+from datetime import datetime
 
 # ⚙️ SOZLAMALAR
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8745420312:AAE6xB0qADkWOWZIj0GleM8u-fioQsZQ_uc")
@@ -66,8 +67,37 @@ def init_db():
             PRIMARY KEY (user_id, code)
         )
     """)
+    # Foydalanuvchilar jadvali (status bilan: active / blocked)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            full_name TEXT,
+            username TEXT,
+            status TEXT DEFAULT 'active',
+            joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     conn.commit()
     conn.close()
+
+# Foydalanuvchini bazaga qo'shish yoki yangilash
+def add_user_to_db(user_id: int, full_name: str, username: str):
+    conn = sqlite3.connect("movies.db")
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO users (user_id, full_name, username, status) 
+            VALUES (?, ?, ?, 'active')
+            ON CONFLICT(user_id) DO UPDATE SET 
+                full_name = excluded.full_name,
+                username = excluded.username,
+                status = 'active'
+        """, (user_id, full_name, username))
+        conn.commit()
+    except Exception as e:
+        print(f"Foydalanuvchini saqlashda xatolik: {e}")
+    finally:
+        conn.close()
 
 # --- RENDER UCHUN VEB-SERVER ---
 async def handle(request):
@@ -128,7 +158,7 @@ def get_main_menu(user_id: int):
 def get_admin_menu():
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📊 Statistika", callback_data="admin_stats")],
+            [InlineKeyboardButton(text="📊 Batafsil Statistika", callback_data="admin_stats")],
             [InlineKeyboardButton(text="➕ Yangi kino qo'shish", callback_data="admin_add_movie")],
             [InlineKeyboardButton(text="📋 Kinolar ro'yxati va o'chirish", callback_data="admin_movie_list_1")],
             [InlineKeyboardButton(text="🏠 Asosiy menyu", callback_data="back_to_main")]
@@ -175,12 +205,23 @@ async def send_movie_details(message: Message, m, increment_views=True):
         else:
             await message.answer(caption, reply_markup=keyboard, parse_mode="Markdown")
     except Exception as e:
+        # Agar foydalanuvchi botni bloklagan bo'lsa
+        if "bot was blocked by the user" in str(e).lower() or "forbidden" in str(e).lower():
+            conn = sqlite3.connect("movies.db")
+            cur = conn.cursor()
+            cur.execute("UPDATE users SET status = 'blocked' WHERE user_id = ?", (message.chat.id,))
+            conn.commit()
+            conn.close()
         print(f"Yuborishda xatolik: {e}")
 
 # Start komandasi
 @dp.message(Command("start"))
 async def start_cmd(message: Message):
     user_id = message.from_user.id
+    full_name = message.from_user.full_name
+    username = message.from_user.username or "Mavjud emas"
+    
+    add_user_to_db(user_id, full_name, username)
     
     if not await check_subscription(user_id):
         await message.answer(
@@ -199,6 +240,11 @@ async def start_cmd(message: Message):
 @dp.callback_query(F.data == "check_sub")
 async def check_sub_callback(callback: CallbackQuery):
     user_id = callback.from_user.id
+    full_name = callback.from_user.full_name
+    username = callback.from_user.username or "Mavjud emas"
+    
+    add_user_to_db(user_id, full_name, username)
+
     if await check_subscription(user_id):
         await callback.message.delete()
         await callback.message.answer(
@@ -227,25 +273,53 @@ async def admin_main_menu_callback(callback: CallbackQuery):
 async def admin_stats(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
         return
+    
     conn = sqlite3.connect("movies.db")
     cursor = conn.cursor()
+    
+    # Kinolar statistikasi
     cursor.execute("SELECT COUNT(*), SUM(views) FROM movies")
     total_movies, total_views = cursor.fetchone()
+    
+    # Foydalanuvchilar statistikasi
+    cursor.execute("SELECT COUNT(*) FROM users")
+    total_users = cursor.fetchone()[0]
+    
+    cursor.execute("SELECT COUNT(*) FROM users WHERE status = 'active'")
+    active_users = cursor.fetchone()[0]
+    
+    cursor.execute("SELECT COUNT(*) FROM users WHERE status = 'blocked'")
+    blocked_users = cursor.fetchone()[0]
+    
+    # Bugun qo'shilganlar (Sana YYYY-MM-DD formatida tekshiriladi)
+    today_date = datetime.now().strftime("%Y-%m-%d")
+    cursor.execute("SELECT COUNT(*) FROM users WHERE date(joined_at) = ?", (today_date,))
+    today_joined = cursor.fetchone()[0]
+    
     conn.close()
     
     if not total_views:
         total_views = 0
         
     text = (
-        f"📊 **Statistika ma'lumotlari:**\n"
+        f"📊 **Batafsil Statistika Ma'lumotlari:**\n"
         f"────────────────────────\n"
-        f"🎬 Jami kinolar: {total_movies} ta\n"
-        f"👀 Jami ko'rishlar: {total_views} ta"
+        f"👥 **Jami foydalanuvchilar:** {total_users} ta\n"
+        f"🟢 **Faol foydalanuvchilar:** {active_users} ta\n"
+        f"🔴 **Botni tark etganlar (Bloklaganlar):** {blocked_users} ta\n"
+        f"📈 **Bugun yangi qo'shilganlar:** {today_joined} ta\n"
+        f"────────────────────────\n"
+        f"🎬 **Bazadagi jami kinolar:** {total_movies} ta\n"
+        f"👀 **Kinolar jami ko'rishlar soni:** {total_views} ta"
     )
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="⬅️ Ortga", callback_data="admin_main_menu")]]
     )
-    await callback.message.answer(text, reply_markup=keyboard, parse_mode="Markdown")
+    
+    try:
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="Markdown")
+    except Exception:
+        await callback.message.answer(text, reply_markup=keyboard, parse_mode="Markdown")
     await callback.answer()
 
 @dp.callback_query(F.data == "admin_add_movie")
@@ -353,7 +427,6 @@ async def admin_movie_list(callback: CallbackQuery):
             InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"del_movie_{code}_{page}")
         ])
     
-    # Sahifalash tugmalari
     nav_buttons = []
     if page > 1:
         nav_buttons.append(InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"admin_movie_list_{page-1}"))
@@ -623,7 +696,6 @@ async def show_new_movies(callback: CallbackQuery):
     await callback.message.answer(text, reply_markup=keyboard, parse_mode="Markdown")
     await callback.answer()
 
-# --- BARCHA KINOLAR RO'YXATI (15 tadan sahifalanadi) ---
 @dp.callback_query(F.data.startswith("cat_all_"))
 async def show_all_movies(callback: CallbackQuery):
     page = int(callback.data.split("_")[2])
@@ -722,7 +794,7 @@ async def show_genre_movies(callback: CallbackQuery):
     try:
         await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="Markdown")
     except Exception:
-        await callback.message.answer(text, reply_markup=keyboard, parse_mode="Markdown")
+        await callback.message.answer(text, reply_markup=keyboard, parse_message="Markdown")
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("fav_add_"))
